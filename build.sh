@@ -4,6 +4,7 @@ HERE="$(dirname "$(readlink -f "$0")")"
 cd "$HERE"
 
 WITH_UPX=1
+VENDOR_UPX=1
 
 platform="$(uname -s)"
 platform_arch="$(uname -m)"
@@ -24,6 +25,22 @@ if [ -x "$(which apk 2>/dev/null)" ]
         apk add musl-dev gcc clang git gettext-dev automake po4a \
             autoconf libtool upx help2man patch make zstd-dev lz4-dev \
             zlib-dev lzo-dev xz-dev sed findutils
+fi
+
+if [ "$WITH_UPX" == 1 ]
+    then
+        if [[ "$VENDOR_UPX" == 1 || ! -x "$(which upx 2>/dev/null)" ]]
+            then
+                upx_ver=4.2.4
+                case "$platform_arch" in
+                   x86_64) upx_arch=amd64 ;;
+                   aarch64) upx_arch=arm64 ;;
+                esac
+                wget https://github.com/upx/upx/releases/download/v${upx_ver}/upx-${upx_ver}-${upx_arch}_linux.tar.xz
+                tar xvf upx-${upx_ver}-${upx_arch}_linux.tar.xz
+                mv upx-${upx_ver}-${upx_arch}_linux/upx /usr/bin/
+                rm -rf upx-${upx_ver}-${upx_arch}_linux*
+        fi
 fi
 
 if [ -d build ]
@@ -81,7 +98,7 @@ mv -fv libzstd.a /usr/lib/))
 
 echo "= download squashfs-tools"
 git clone https://github.com/plougher/squashfs-tools.git
-squashfs_tools_version="$(cd squashfs-tools && git tag --list|tac|grep '^[0-9]'|head -1|sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g')"
+squashfuse_version="$(cd squashfs-tools && git describe --long --tags|sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g')"
 squashfs_tools_dir="${HERE}/build/squashfs-tools-${squashfs_tools_version}"
 mv "squashfs-tools" "${squashfs_tools_dir}"
 echo "= squashfs-tools v${squashfs_tools_version}"
@@ -104,7 +121,7 @@ make
 mv -fv sstrip /usr/bin/)
 
 echo "= super-strip release binaries"
-sstrip release/*
+sstrip release/*-"${platform_arch}"
 
 if [[ "$WITH_UPX" == 1 && -x "$(which upx 2>/dev/null)" ]]
     then
