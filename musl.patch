@@ -1,0 +1,13 @@
+diff --git a/squashfs-tools/print_pager.h b/squashfs-tools/print_pager.h
+index 899c227..6dadd3c 100644
+--- a/squashfs-tools/print_pager.h
++++ b/squashfs-tools/print_pager.h
+@@ -30,6 +30,8 @@
+ #define MORE_PAGER 2
+ #define UNKNOWN_PAGER 3
+ 
++#include <unistd.h>
++
+ extern void wait_to_die(pid_t process);
+ extern FILE *exec_pager(pid_t *process);
+ extern int get_column_width();
