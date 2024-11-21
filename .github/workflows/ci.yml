@@ -23,11 +23,11 @@ jobs:
 
       - name: Build x86_64
         run: |
-            docker run --rm -it -v "${{ github.workspace }}:/root" --platform=linux/amd64 alpine:latest /root/build.sh
+            docker run --rm -v "${{ github.workspace }}:/root" --platform=linux/amd64 alpine:latest /root/build.sh
 
       - name: Build aarch64
         run: |
-            docker run --rm -it -v "${{ github.workspace }}:/root" --platform=linux/arm64 alpine:latest /root/build.sh
+            docker run --rm -v "${{ github.workspace }}:/root" --platform=linux/arm64 alpine:latest /root/build.sh
 
       - name: Release
         uses: softprops/action-gh-release@v2
