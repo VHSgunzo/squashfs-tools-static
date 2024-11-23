@@ -105,6 +105,7 @@ echo "= squashfs-tools v${squashfs_tools_version}"
 
 echo "= build squashfs-tools"
 (cd "${squashfs_tools_dir}"/squashfs-tools
+git checkout 4.6.1
 patch -p2<"${HERE}/musl.patch"
 env CC=clang XZ_SUPPORT=1 LZO_SUPPORT=1 LZ4_SUPPORT=1 ZSTD_SUPPORT=1 \
 make INSTALL_DIR="${squashfs_tools_dir}/install" LDFLAGS="$LDFLAGS" install)
