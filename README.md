@@ -1,6 +1,6 @@
 # squashfs-tools-static
 
-Statically linked [squashfs-tools](https://github.com/plougher/squashfs-tools) compiled with musl libc
+Statically linked [squashfs-tools](https://github.com/plougher/squashfs-tools) compiled with musl libc and [mimalloc](https://github.com/microsoft/mimalloc)
 
 ## To get started:
 * **Download the latest revision**

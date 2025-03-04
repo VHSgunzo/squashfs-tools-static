@@ -24,7 +24,7 @@ if [ -x "$(which apk 2>/dev/null)" ]
     then
         apk add musl-dev gcc clang git gettext-dev automake po4a \
             autoconf libtool upx help2man patch make zstd-dev lz4-dev \
-            zlib-dev lzo-dev xz-dev sed findutils
+            zlib-dev lzo-dev xz-dev sed findutils mimalloc-dev cmake g++
 fi
 
 if [ "$WITH_UPX" == 1 ]
@@ -63,11 +63,19 @@ mkdir -p release
 
 export CFLAGS="$CFLAGS -Os -g0 -ffunction-sections -fdata-sections -fvisibility=hidden -fmerge-all-constants"
 export LDFLAGS="$LDFLAGS -Wl,--gc-sections -Wl,--strip-all"
+export CC=gcc
 
 echo "= build static deps"
-(export CC=gcc
 
-echo "= build lzma lib"
+echo "= build mimalloc lib"
+(git clone https://github.com/microsoft/mimalloc.git && cd mimalloc
+mkdir build && cd build
+cmake .. && make mimalloc-static
+mv -fv libmimalloc.a /usr/lib/)
+
+export CFLAGS="$CFLAGS -lmimalloc"
+
+(echo "= build lzma lib"
 (git clone https://git.tukaani.org/xz.git && cd xz
 ./autogen.sh
 ./configure --enable-static --disable-shared
@@ -107,7 +115,7 @@ echo "= build squashfs-tools"
 (cd "${squashfs_tools_dir}"/squashfs-tools
 git checkout 4.6.1
 # patch -p2<"${HERE}/musl.patch"
-env CC=clang XZ_SUPPORT=1 LZO_SUPPORT=1 LZ4_SUPPORT=1 ZSTD_SUPPORT=1 \
+env XZ_SUPPORT=1 LZO_SUPPORT=1 LZ4_SUPPORT=1 ZSTD_SUPPORT=1 \
 make INSTALL_DIR="${squashfs_tools_dir}/install" LDFLAGS="$LDFLAGS" install)
 
 echo "= extracting squashfs-tools binaries"
@@ -128,7 +136,7 @@ if [[ "$WITH_UPX" == 1 && -x "$(which upx 2>/dev/null)" ]]
     then
         echo "= upx compressing"
         find release -name "*-${platform_arch}"|\
-        xargs -I {} upx --force-overwrite -9 --best {} -o {}-upx
+        xargs -I {} upx --force-overwrite {} -o {}-upx
 fi
 
 if [ "$NO_CLEANUP" != 1 ]
