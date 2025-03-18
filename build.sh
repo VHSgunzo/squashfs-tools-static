@@ -24,7 +24,7 @@ if [ -x "$(which apk 2>/dev/null)" ]
     then
         apk add musl-dev gcc clang git gettext-dev automake po4a \
             autoconf libtool upx help2man patch make zstd-dev lz4-dev \
-            zlib-dev lzo-dev xz-dev sed findutils mimalloc-dev cmake g++
+            zlib-dev lzo-dev xz-dev sed findutils cmake g++
 fi
 
 if [ "$WITH_UPX" == 1 ]
@@ -69,8 +69,17 @@ echo "= build static deps"
 
 echo "= build mimalloc lib"
 (git clone https://github.com/microsoft/mimalloc.git && cd mimalloc
+git checkout v2.1.7
 mkdir build && cd build
-cmake .. && make mimalloc-static
+(export CFLAGS="$CFLAGS -D__USE_ISOC11"
+cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DMI_BUILD_OBJECT=OFF \
+    -DMI_BUILD_TESTS=OFF \
+    -DMI_LIBC_MUSL=ON \
+    -DMI_SECURE=OFF \
+    -DMI_SKIP_COLLECT_ON_EXIT=ON && \
+make mimalloc-static)
 mv -fv libmimalloc.a /usr/lib/)
 
 export CFLAGS="$CFLAGS -lmimalloc"
