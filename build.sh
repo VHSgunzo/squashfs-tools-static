@@ -80,7 +80,7 @@ cmake .. \
     -DMI_SECURE=OFF \
     -DMI_SKIP_COLLECT_ON_EXIT=ON && \
 make mimalloc-static)
-mv -fv libmimalloc.a /usr/lib/)
+cp -fv libmimalloc.a /usr/lib/)
 
 export CFLAGS="$CFLAGS -lmimalloc"
 
@@ -89,29 +89,29 @@ export CFLAGS="$CFLAGS -lmimalloc"
 ./autogen.sh
 ./configure --enable-static --disable-shared
 make
-mv -fv src/liblzma/.libs/liblzma.a /usr/lib/)
+cp -fv src/liblzma/.libs/liblzma.a /usr/lib/)
 
 echo "= build lzo2 lib"
 (git clone https://github.com/nemequ/lzo.git && cd lzo
 ./configure --enable-static --disable-shared
 make
-mv -fv src/.libs/liblzo2.a /usr/lib/)
+cp -fv src/.libs/liblzo2.a /usr/lib/)
 
 echo "= build zlib lib"
 (git clone https://github.com/madler/zlib.git  && cd zlib
 ./configure
 make libz.a
-mv -fv libz.a /usr/lib/)
+cp -fv libz.a /usr/lib/)
 
 echo "= build lz4 lib"
 (git clone https://github.com/lz4/lz4.git && cd lz4
 make liblz4.a
-mv -fv lib/liblz4.a /usr/lib/)
+cp -fv lib/liblz4.a /usr/lib/)
 
 echo "= build zstd lib"
 (git clone https://github.com/facebook/zstd.git && cd zstd/lib
 make libzstd.a
-mv -fv libzstd.a /usr/lib/))
+cp -fv libzstd.a /usr/lib/))
 
 echo "= download squashfs-tools"
 git clone https://github.com/plougher/squashfs-tools.git
@@ -122,7 +122,7 @@ echo "= squashfs-tools v${squashfs_tools_version}"
 
 echo "= build squashfs-tools"
 (cd "${squashfs_tools_dir}"/squashfs-tools
-git checkout 4.6.1
+git checkout 4.7.2
 # patch -p2<"${HERE}/musl.patch"
 env XZ_SUPPORT=1 LZO_SUPPORT=1 LZ4_SUPPORT=1 ZSTD_SUPPORT=1 \
 make INSTALL_DIR="${squashfs_tools_dir}/install" LDFLAGS="$LDFLAGS" install)
@@ -130,13 +130,13 @@ make INSTALL_DIR="${squashfs_tools_dir}/install" LDFLAGS="$LDFLAGS" install)
 echo "= extracting squashfs-tools binaries"
 for bin in "${squashfs_tools_dir}"/install/*
     do [[ ! -L "$bin" && -f "$bin" ]] && \
-        mv -fv "$bin" "${HERE}"/release/"$(basename "${bin}")-${platform_arch}"
+        cp -fv "$bin" "${HERE}"/release/"$(basename "${bin}")-${platform_arch}"
 done)
 
 echo "= build super-strip"
 (cd build && git clone https://github.com/aunali1/super-strip.git && cd super-strip
 make
-mv -fv sstrip /usr/bin/)
+cp -fv sstrip /usr/bin/)
 
 echo "= super-strip release binaries"
 sstrip release/*-"${platform_arch}"
