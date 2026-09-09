@@ -221,7 +221,11 @@ fi
 printf 'ok - failed release installation keeps prior output and cleans its temporary file\n'
 
 build_script=$ROOT/build.sh
-if grep -E '(WITH_UPX|VENDOR_UPX|UPX_VERSION|super-strip|sstrip|upx --force-overwrite)' "$build_script" >/dev/null; then
-    fail "build.sh still mandates UPX or host sstrip post-processing"
+if grep -E '(WITH_UPX|VENDOR_UPX|UPX_VERSION|upx --force-overwrite)' "$build_script" >/dev/null; then
+    fail "build.sh still contains UPX post-processing"
 fi
-printf 'ok - build.sh has no mandatory host post-processing\n'
+grep -F 'make CC="$BUILD_CC" AR=ar RANLIB=ranlib' "$build_script" >/dev/null ||
+    fail 'sstrip is not built with isolated host tools'
+grep -F "CFLAGS='-O2 -Ielfrw' CPPFLAGS= LDFLAGS=" "$build_script" >/dev/null ||
+    fail 'sstrip host build leaks target flags or lacks -Ielfrw'
+printf 'ok - build.sh requires sstrip and contains no UPX post-processing\n'

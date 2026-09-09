@@ -27,6 +27,7 @@ LZO_COMMIT=0083878c235a89ef96a009d1ff0b500f3a364e4b  # no tags
 ZLIB_COMMIT=e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca # 1.3.2
 LZ4_COMMIT=0774d05537f9762f838f7ab541b7765f1a729cb5  # 1.10.0
 ZSTD_COMMIT=d9c0c7e2cf8a8bf9fb98d3bee546dcf8dc9ac59a # 1.5.7
+SUPER_STRIP_COMMIT=9c57e288d8b2e0f90c9a15a4223331d1e7b43515 # 3.0a
 NO_CLEANUP=${NO_CLEANUP:-0}
 
 [ "$(uname -s)" = Linux ] || {
@@ -82,6 +83,20 @@ staged_release=$work/release
 mkdir -p "$staged_release" "$BUILD_PREFIX/include" "$BUILD_PREFIX/lib"
 
 cd "$work"
+
+echo '= build pinned super-strip for the build host'
+git clone https://github.com/aunali1/super-strip.git
+(
+    cd super-strip
+    checkout_pinned_source . "$SUPER_STRIP_COMMIT"
+    make CC="$BUILD_CC" AR=ar RANLIB=ranlib \
+        CFLAGS='-O2 -Ielfrw' CPPFLAGS= LDFLAGS=
+)
+sstrip=$work/super-strip/sstrip
+[ -x "$sstrip" ] || {
+    printf '%s\n' 'host sstrip build did not produce an executable' >&2
+    exit 1
+}
 
 echo '= build mimalloc static library'
 git clone https://github.com/microsoft/mimalloc.git
@@ -168,16 +183,30 @@ git clone https://github.com/plougher/squashfs-tools.git
 (
     cd squashfs-tools
     checkout_pinned_source . "$SQUASHFS_TOOLS_COMMIT"
+    patch -p1 <"$HERE/patches/squashfs-tools-mimalloc.patch"
     cd squashfs-tools
-    mimalloc_link="-Wl,--whole-archive,$BUILD_PREFIX/lib/libmimalloc.a,--no-whole-archive"
     make XZ_SUPPORT=1 LZO_SUPPORT=1 LZ4_SUPPORT=1 ZSTD_SUPPORT=1 \
         CC="$CC" EXTRA_CFLAGS="-I$BUILD_PREFIX/include" \
-        LDFLAGS="$LDFLAGS" EXTRA_LDFLAGS="$mimalloc_link" \
+        LDFLAGS="$LDFLAGS" \
         mksquashfs unsquashfs
+    "$HERE/scripts/validate-mimalloc-map.sh" mksquashfs.map unsquashfs.map
     install_release_binary mksquashfs "$staged_release" "$TARGET_ARCH"
     install_release_binary unsquashfs "$staged_release" "$TARGET_ARCH"
 )
 
+RELEASE_DIR=$staged_release "$HERE/scripts/validate-artifacts.sh" --before-sstrip "$TARGET_ARCH"
+mksquashfs_artifact=$staged_release/mksquashfs-$TARGET_ARCH
+mksquashfs_size_before=$(wc -c <"$mksquashfs_artifact")
+"$sstrip" "$staged_release/mksquashfs-$TARGET_ARCH"
+mksquashfs_size_after=$(wc -c <"$mksquashfs_artifact")
+printf '= sstrip size mksquashfs-%s: %s -> %s bytes\n' \
+    "$TARGET_ARCH" "$mksquashfs_size_before" "$mksquashfs_size_after"
+unsquashfs_artifact=$staged_release/unsquashfs-$TARGET_ARCH
+unsquashfs_size_before=$(wc -c <"$unsquashfs_artifact")
+"$sstrip" "$staged_release/unsquashfs-$TARGET_ARCH"
+unsquashfs_size_after=$(wc -c <"$unsquashfs_artifact")
+printf '= sstrip size unsquashfs-%s: %s -> %s bytes\n' \
+    "$TARGET_ARCH" "$unsquashfs_size_before" "$unsquashfs_size_after"
 RELEASE_DIR=$staged_release "$HERE/scripts/validate-artifacts.sh" "$TARGET_ARCH"
 publish_release_pair \
     "$staged_release/mksquashfs-$TARGET_ARCH" "mksquashfs-$TARGET_ARCH" \

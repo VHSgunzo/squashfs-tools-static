@@ -31,7 +31,7 @@ assert_row()
     printf 'ok - %s matrix row\n' "$arch"
 }
 
-ALPINE='docker.io/library/alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce'
+ALPINE='docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b'
 LOONG_ALPINE='docker.io/loongarch64/alpine:3.21@sha256:ba4698dc340db5079eea01b7ea3488452a9a1c3cb8aad11033ea2cc978f49ffc'
 assert_row x86_64 linux/amd64 "$ALPINE" native-emulated 'Advanced Micro Devices X86-64' little native
 assert_row aarch64 linux/arm64 "$ALPINE" native-emulated AArch64 little qemu-aarch64-static

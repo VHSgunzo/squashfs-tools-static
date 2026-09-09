@@ -20,6 +20,8 @@ grep -F './scripts/build-matrix.sh "${{ matrix.arch }}"' "$WORKFLOW" >/dev/null 
     fail 'matrix job does not build exactly its selected architecture'
 grep -F './scripts/smoke-test.sh "${{ matrix.arch }}"' "$WORKFLOW" >/dev/null ||
     fail 'matrix job does not smoke-test its selected architecture'
+grep -F './scripts/validate-artifacts.sh "${{ matrix.arch }}"' "$WORKFLOW" >/dev/null ||
+    fail 'matrix job does not enforce the ET_DYN/sstrip artifact contract'
 grep -F 'image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0' "$WORKFLOW" >/dev/null ||
     fail 'QEMU binfmt image is not digest-pinned'
 grep -F '          . ./lib/matrix.sh' "$WORKFLOW" >/dev/null ||

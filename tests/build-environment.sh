@@ -38,14 +38,10 @@ LDFLAGS=-caller-ldflag
 configure_build_environment "$TMP/project"
 
 [ "$BUILD_PREFIX" = "$TMP/project/build/sysroot/ppc64" ] || fail 'target-specific build prefix'
-case $CFLAGS in
-    *-caller-cflag*"-I$BUILD_PREFIX/include"*-static*) ;;
-    *) fail "target include/static flags: $CFLAGS" ;;
-esac
-case $LDFLAGS in
-    *-caller-ldflag*"-L$BUILD_PREFIX/lib"*--static*) ;;
-    *) fail "target library/static flags: $LDFLAGS" ;;
-esac
+expected_cflags="-caller-cflag -Os -g0 -ffunction-sections -fdata-sections -fvisibility=hidden -fmerge-all-constants -I$BUILD_PREFIX/include -static-pie"
+[ "$CFLAGS" = "$expected_cflags" ] || fail "legacy/static-PIE CFLAGS: $CFLAGS"
+expected_ldflags="-caller-ldflag -L$BUILD_PREFIX/lib -Wl,-static -static-pie -Wl,--gc-sections -Wl,--strip-all"
+[ "$LDFLAGS" = "$expected_ldflags" ] || fail "legacy/static-PIE LDFLAGS: $LDFLAGS"
 [ "$PKG_CONFIG_LIBDIR" = "$BUILD_PREFIX/lib/pkgconfig:$BUILD_PREFIX/share/pkgconfig" ] ||
     fail 'pkg-config is not isolated to target prefix'
 case $PKG_CONFIG_LIBDIR in

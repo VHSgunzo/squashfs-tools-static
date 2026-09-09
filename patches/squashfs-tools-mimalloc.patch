@@ -1,0 +1,13 @@
+diff --git a/squashfs-tools/Makefile b/squashfs-tools/Makefile
+index 7fe953ef..158c2a7e 100644
+--- a/squashfs-tools/Makefile
++++ b/squashfs-tools/Makefile
+@@ -478,0 +479,2 @@ CFLAGS += -DVERSION=\"$(VERSION)\" -DDATE=\"$(DATE)\" -DYEAR=\"$(YEAR)\"
++LIBS += -lmimalloc
++
+@@ -482 +484 @@ mksquashfs: $(MKSQUASHFS_OBJS)
+-	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) $(MKSQUASHFS_OBJS) $(LIBS) -o $@
++	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -Wl,-Map,$@.map,--cref $(MKSQUASHFS_OBJS) $(LIBS) -o $@
+@@ -565 +567 @@ unsquashfs: $(UNSQUASHFS_OBJS)
+-	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) $(UNSQUASHFS_OBJS) $(LIBS) -o $@
++	$(CC) $(LDFLAGS) $(EXTRA_LDFLAGS) -Wl,-Map,$@.map,--cref $(UNSQUASHFS_OBJS) $(LIBS) -o $@

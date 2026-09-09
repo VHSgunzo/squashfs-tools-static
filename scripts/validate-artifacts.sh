@@ -5,6 +5,11 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # shellcheck source=../lib/matrix.sh
 . "$ROOT/lib/matrix.sh"
 
+validation_stage=release
+if [ "${1:-}" = --before-sstrip ]; then
+    validation_stage=before-sstrip
+    shift
+fi
 arch=${1:-}
 validate_matrix_arch "$arch" || exit 2
 RELEASE_DIR=${RELEASE_DIR:-$ROOT/release}
@@ -34,7 +39,6 @@ do
         printf '%s: expected ELF64 %s %s endian\n' "$artifact" "$machine" "$endian" >&2
         exit 1
     fi
-
     if LC_ALL=C readelf -l "$artifact" | grep -E 'INTERP|Requesting program interpreter' >/dev/null; then
         printf '%s contains PT_INTERP and is not static\n' "$artifact" >&2
         exit 1
@@ -43,5 +47,20 @@ do
         printf '%s contains DT_NEEDED shared-library dependencies and is not static\n' "$artifact" >&2
         exit 1
     fi
-    printf '= validated %s: ELF64 %s %s endian, static\n' "$name" "$machine" "$endian"
+    if ! printf '%s\n' "$header" | grep -F 'Type:' | grep -F 'DYN (Position-Independent Executable file)' >/dev/null; then
+        printf '%s must be ET_DYN static PIE (not ET_EXEC)\n' "$artifact" >&2
+        exit 1
+    fi
+    stage_description=
+    if [ "$validation_stage" = release ]; then
+        section_offset=$(printf '%s\n' "$header" | sed -n 's/^[[:space:]]*Start of section headers:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+        section_count=$(printf '%s\n' "$header" | sed -n 's/^[[:space:]]*Number of section headers:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+        if [ "$section_offset" != 0 ] || [ "$section_count" != 0 ]; then
+            printf '%s retains a section header table; required sstrip was not applied\n' "$artifact" >&2
+            exit 1
+        fi
+        stage_description=', no section headers'
+    fi
+    printf '= validated %s: ELF64 ET_DYN static PIE, %s %s endian%s\n' \
+        "$name" "$machine" "$endian" "$stage_description"
 done

@@ -28,10 +28,10 @@ configure_build_environment()
             ;;
     esac
 
-    CFLAGS="${CFLAGS:+$CFLAGS }-Os -g0 -ffunction-sections -fdata-sections -fvisibility=hidden -fmerge-all-constants -I$BUILD_PREFIX/include -static"
+    CFLAGS="${CFLAGS:+$CFLAGS }-Os -g0 -ffunction-sections -fdata-sections -fvisibility=hidden -fmerge-all-constants -I$BUILD_PREFIX/include -static-pie"
     CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }$CFLAGS"
     CPPFLAGS="${CPPFLAGS:+$CPPFLAGS }-I$BUILD_PREFIX/include"
-    LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$BUILD_PREFIX/lib --static -Wl,--gc-sections -Wl,--strip-all"
+    LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$BUILD_PREFIX/lib -Wl,-static -static-pie -Wl,--gc-sections -Wl,--strip-all"
     PKG_CONFIG_LIBDIR=$BUILD_PREFIX/lib/pkgconfig:$BUILD_PREFIX/share/pkgconfig
     PKG_CONFIG_PATH=
 

@@ -10,7 +10,7 @@ fail()
     exit 1
 }
 
-for dependency in SQUASHFS_TOOLS MIMALLOC XZ LZO ZLIB LZ4 ZSTD
+for dependency in SQUASHFS_TOOLS MIMALLOC XZ LZO ZLIB LZ4 ZSTD SUPER_STRIP
 do
     assignment=$(sed -n "s/^${dependency}_COMMIT=\([0-9a-f]*\).*/\1/p" "$BUILD")
     case $assignment in
@@ -19,7 +19,7 @@ do
     esac
 done
 
-for dependency in SQUASHFS_TOOLS MIMALLOC XZ LZO ZLIB LZ4 ZSTD
+for dependency in SQUASHFS_TOOLS MIMALLOC XZ LZO ZLIB LZ4 ZSTD SUPER_STRIP
 do
     grep -F 'checkout_pinned_source . "$'"${dependency}"'_COMMIT"' "$BUILD" >/dev/null ||
         fail "$dependency source does not use checkout plus HEAD verification"

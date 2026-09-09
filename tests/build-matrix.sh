@@ -27,7 +27,7 @@ fail()
 DOCKER="$FAKE_DOCKER" DOCKER_CAPTURE="$CAPTURE" "$MATRIX_SCRIPT" ppc64
 for expected in \
     '<run>' '<--rm>' '<--platform>' '<linux/amd64>' '<-e>' '<TARGET_ARCH=ppc64>' \
-    '<docker.io/library/alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce>' \
+    '<docker.io/library/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b>' \
     '<./scripts/build-ppc64.sh>'
 do
     grep -Fx "$expected" "$CAPTURE" >/dev/null || fail "ppc64 invocation missing $expected"
