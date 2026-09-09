@@ -171,21 +171,17 @@ done
 PATH="$toolchain_bin:$PATH" TOOLCHAIN_CAPTURE="$toolchain_capture" TARGET_ARCH=x86_64 \
     CC=cc CXX=c++ AR=ar RANLIB=ranlib STRIP=strip \
     "$toolchain_root/build.sh" 2>"$test_tmp/cleanup-error" || :
-for stale in \
+for preserved in \
     mksquashfs-x86_64 unsquashfs-x86_64 \
-    mksquashfs-x86_64-upx unsquashfs-x86_64-upx
+    mksquashfs-x86_64-upx unsquashfs-x86_64-upx \
+    mksquashfs-aarch64 unsquashfs-ppc64le-upx notes-x86_64.txt
 do
-    [ ! -e "$toolchain_root/release/$stale" ] || {
+    [ -e "$toolchain_root/release/$preserved" ] || {
         cat "$test_tmp/cleanup-error" >&2
-        fail "current-target stale release asset was not removed: $stale"
+        fail "failed build removed existing release asset: $preserved"
     }
 done
-for preserved in mksquashfs-aarch64 unsquashfs-ppc64le-upx notes-x86_64.txt
-do
-    [ -e "$toolchain_root/release/$preserved" ] ||
-        fail "cleanup removed unrelated release asset: $preserved"
-done
-printf 'ok - cleanup removes only current-target release and legacy UPX assets\n'
+printf 'ok - failed build preserves current-target and unrelated release assets\n'
 
 [ -r "$ROOT/lib/release.sh" ] || fail "release installation helper is missing"
 # shellcheck source=../lib/release.sh

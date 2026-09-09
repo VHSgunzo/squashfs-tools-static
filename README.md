@@ -34,13 +34,14 @@ Build one architecture at a time from the repository root:
 ```
 
 Build the complete release matrix with `./scripts/build-matrix.sh all`.
-Each command writes exactly these uncompressed static executables for its
-selected architecture:
+Each selected target builds and validates both outputs under its target work directory before publishing them as a pair. Pair publication stages adjacent temporary files, backs up any previous pair, and rolls back the first rename if the second rename or a signal interrupts the transaction. A failed or interrupted musl target build leaves its previously published pair unchanged; obsolete `-upx` files are removed only after the normal pair is replaced successfully. Every other target's outputs are preserved:
 
 ```text
 release/mksquashfs-ARCH
 release/unsquashfs-ARCH
 ```
+
+Same-target musl builds are serialized by a per-target lock in `release/`; different targets can proceed independently. Each canonical lock is atomically hard-linked from an adjacent private file that already contains its owner, so observers never see an empty lock. Normal exits and handled signals remove the canonical lock and private file. If the process is killed without running traps, remove a stale lock only after confirming that no build for that target is still running.
 
 `ARCH` is one of `x86_64`, `aarch64`, `riscv64`, `loongarch64`, `ppc64`, or
 `ppc64le`. The matrix driver uses pinned Alpine image digests. Most targets
@@ -102,15 +103,10 @@ under `scripts/` above are the integration checks for actual build artifacts.
 
 ### Release safety
 
-Published releases are treated as immutable. Re-running publication for a tag
-is a no-op only when its published release already has the exact expected
-12-asset manifest; any mismatch fails without deleting or replacing assets. A
-missing release is created as a draft, receives all assets without clobbering,
-and is published only after its exact manifest is read back.
-Failures delete only the newly created release by ID after a fresh API read
-confirms that exact release is still a draft. If confirmation or deletion fails,
-the release is left for manual inspection. Git tag components may begin with
-`-`, so release CLI calls use an
-option separator to keep such a tag from being parsed as a flag.
+Published releases are treated as immutable. An existing published release is a no-op only if it has the exact expected 12-asset manifest; a mismatch fails without mutation. A missing release is created as a verified-tag draft, all 12 assets are uploaded without clobbering historical assets, and the draft is published only after exact manifest verification.
+
+Every create attempt places a unique ownership marker in the draft notes as part of the creation request. Failures clean up only a freshly read draft whose ID, tag, draft state, and per-attempt ownership marker all match; a competing publisher draft is never deleted. Publishing atomically clears the internal marker while changing the draft state, and the public read-back requires empty notes. Malformed metadata, ambiguous publication responses, failed state reads, or changed/public state leave the release intact for manual inspection. Release jobs are serialized by repository and tag as defense in depth, publication is tag-push-only, and only the release job receives `contents: write` and a GitHub token.
+
+Git tag components may begin with `-`, so release CLI calls use an option separator to keep such a tag from being parsed as a flag.
 
 * Or take an already precompiled from the [releases](https://github.com/VHSgunzo/squashfs-tools-static/releases)

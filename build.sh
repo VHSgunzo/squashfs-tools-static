@@ -53,15 +53,33 @@ if [ "$BUILD_MODE" = native-emulated ]; then
 fi
 
 work=$BUILD_ROOT/work-$TARGET_ARCH
+mkdir -p "$HERE/release"
+target_lock=$HERE/release/.build-$TARGET_ARCH.lock
+target_lock_owner=$$
+lock_acquired=false
+lock_attempted=false
+cleanup_target_build()
+{
+    result=$?
+    trap - EXIT HUP INT TERM
+    if [ "$lock_acquired" = true ]; then
+        release_target_lock "$target_lock" "$target_lock_owner"
+    elif [ "$lock_attempted" = true ]; then
+        # Covers a signal after atomic lock creation but before acquisition returns.
+        release_target_lock "$target_lock" "$target_lock_owner"
+    fi
+    exit "$result"
+}
+trap cleanup_target_build EXIT
+trap 'exit 1' HUP INT TERM
+lock_attempted=true
+acquire_target_lock "$target_lock" "$target_lock_owner"
+lock_acquired=true
+
 echo "= reset target build workspace $work"
 rm -rf "$work" "$BUILD_PREFIX"
-mkdir -p "$work" "$BUILD_PREFIX/include" "$BUILD_PREFIX/lib" release
-
-echo "= remove only previous ${TARGET_ARCH} release outputs"
-rm -f "$HERE/release/mksquashfs-$TARGET_ARCH" \
-    "$HERE/release/unsquashfs-$TARGET_ARCH" \
-    "$HERE/release/mksquashfs-$TARGET_ARCH-upx" \
-    "$HERE/release/unsquashfs-$TARGET_ARCH-upx"
+staged_release=$work/release
+mkdir -p "$staged_release" "$BUILD_PREFIX/include" "$BUILD_PREFIX/lib"
 
 cd "$work"
 
@@ -156,10 +174,17 @@ git clone https://github.com/plougher/squashfs-tools.git
         CC="$CC" EXTRA_CFLAGS="-I$BUILD_PREFIX/include" \
         LDFLAGS="$LDFLAGS" EXTRA_LDFLAGS="$mimalloc_link" \
         mksquashfs unsquashfs
-    install_release_binary mksquashfs "$HERE/release" "$TARGET_ARCH"
-    install_release_binary unsquashfs "$HERE/release" "$TARGET_ARCH"
+    install_release_binary mksquashfs "$staged_release" "$TARGET_ARCH"
+    install_release_binary unsquashfs "$staged_release" "$TARGET_ARCH"
 )
 
+RELEASE_DIR=$staged_release "$HERE/scripts/validate-artifacts.sh" "$TARGET_ARCH"
+publish_release_pair \
+    "$staged_release/mksquashfs-$TARGET_ARCH" "mksquashfs-$TARGET_ARCH" \
+    "$staged_release/unsquashfs-$TARGET_ARCH" "unsquashfs-$TARGET_ARCH" \
+    "$HERE/release"
+rm -f "$HERE/release/mksquashfs-$TARGET_ARCH-upx" \
+    "$HERE/release/unsquashfs-$TARGET_ARCH-upx"
 "$HERE/scripts/validate-artifacts.sh" "$TARGET_ARCH"
 
 if [ "$NO_CLEANUP" != 1 ]; then

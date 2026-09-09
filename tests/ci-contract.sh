@@ -54,6 +54,10 @@ grep -F 'release/unsquashfs-${{ matrix.arch }}' "$WORKFLOW" >/dev/null ||
 grep -F 'if-no-files-found: error' "$WORKFLOW" >/dev/null || fail 'missing artifacts do not fail upload'
 
 grep -F 'needs: build' "$WORKFLOW" >/dev/null || fail 'release does not wait for every matrix build'
+grep -F 'group: release-${{ github.repository }}-${{ github.ref_name }}' "$WORKFLOW" >/dev/null ||
+    fail 'release jobs are not serialized by repository and tag'
+grep -F 'cancel-in-progress: false' "$WORKFLOW" >/dev/null ||
+    fail 'a newer release job can cancel an in-progress publisher'
 grep -F "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')" "$WORKFLOW" >/dev/null ||
     fail 'release is not restricted to tag pushes'
 grep -F 'merge-multiple: true' "$WORKFLOW" >/dev/null || fail 'release does not aggregate matrix artifacts'
@@ -76,8 +80,8 @@ if grep -F 'releases/assets/' "$ROOT/scripts/publish-release.sh" >/dev/null; the
 fi
 grep -F 'existing release asset manifest mismatch; refusing to mutate published release' "$ROOT/scripts/publish-release.sh" >/dev/null ||
     fail 'existing mismatched releases are not fail-closed'
-grep -F 'draft=false' "$ROOT/scripts/publish-release.sh" >/dev/null ||
-    fail 'verified draft is not explicitly published'
+grep -F '{"draft":false,"body":""}' "$ROOT/scripts/publish-release.sh" >/dev/null ||
+    fail 'verified draft is not published with its ownership marker removed'
 grep -F 'published release asset manifest verification failed' "$ROOT/scripts/publish-release.sh" >/dev/null ||
     fail 'release helper does not read back published assets'
 [ "$(grep -c 'contents: write' "$WORKFLOW")" -eq 1 ] ||

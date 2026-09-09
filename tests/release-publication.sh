@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
@@ -21,8 +21,12 @@ done
 
 grep -F 'Published releases are treated as immutable' "$ROOT/README.md" >/dev/null ||
     fail 'README does not document immutable release behavior'
-grep -F 'Failures delete only the newly created release by ID after a fresh API read' "$ROOT/README.md" >/dev/null ||
-    fail 'README does not document confirmed-draft cleanup policy'
+grep -F 'Failures clean up only a freshly read draft whose ID, tag, draft state, and per-attempt ownership marker all match; a competing publisher draft is never deleted' "$ROOT/README.md" >/dev/null ||
+    fail 'README does not document ownership-marked draft cleanup policy'
+grep -F 'A failed or interrupted musl target build leaves its previously published pair unchanged' "$ROOT/README.md" >/dev/null ||
+    fail 'README does not state rollback-safe pair publication semantics'
+grep -F 'Same-target musl builds are serialized by a per-target lock' "$ROOT/README.md" >/dev/null ||
+    fail 'README does not document same-target build locking'
 
 cat >"$TMP/gh" <<'EOF'
 #!/bin/sh
@@ -35,6 +39,8 @@ emit_manifest()
     . "$TEST_ROOT/lib/matrix.sh"
     expected_artifact_manifest
 }
+
+marker_base64=$(printf '%s' "$MARKER" | base64 | tr -d '\n')
 
 case ${1:-} in
     api)
@@ -73,9 +79,11 @@ case ${1:-} in
                 shift 3
                 case "$method:$endpoint" in
                     PATCH:*/releases/43)
-                        [ "$*" = '-f draft=false --silent' ] || exit 92
+                        [ "$*" = '--input - --silent' ] || exit 92
+                        [ "$(cat)" = '{"draft":false,"body":""}' ] || exit 105
                         [ -e "$GH_STATE/uploaded" ] || exit 93
                         : >"$GH_STATE/published"
+                        : >"$GH_STATE/body-cleared"
                         [ "$MODE" != publish-response-lost ] || exit 45
                         ;;
                     DELETE:*/releases/43)
@@ -84,6 +92,10 @@ case ${1:-} in
                             [ ! -e "$GH_STATE/published" ] || exit 95
                         fi
                         : >"$GH_STATE/deleted"
+                        rm -f "$GH_STATE/created"
+                        ;;
+                    DELETE:*/releases/77)
+                        : >"$GH_STATE/deleted-competitor"
                         rm -f "$GH_STATE/created"
                         ;;
                     *) exit 96 ;;
@@ -107,6 +119,18 @@ case ${1:-} in
                                 ;;
                         esac
                         ;;
+                    */releases/tags/*:'--jq [.id, .draft, .tag_name, (.body | @base64)] | @tsv')
+                        [ -e "$GH_STATE/created" ] || exit 97
+                        if [ "$MODE" = competitor-create ]; then
+                            printf '77\ttrue\t%s\t\n' "$TAG"
+                            exit 0
+                        fi
+                        if [ -e "$GH_STATE/published" ]; then
+                            printf '43\tfalse\t%s\t\n' "$TAG"
+                        else
+                            printf '43\ttrue\t%s\t%s\n' "$TAG" "$marker_base64"
+                        fi
+                        ;;
                     */releases/43:'--jq [.id, .draft] | @tsv')
                         [ "$MODE" != state-read-fail ] || exit 46
                         [ -e "$GH_STATE/created" ] || exit 97
@@ -115,6 +139,21 @@ case ${1:-} in
                         else
                             printf '43\ttrue\n'
                         fi
+                        ;;
+                    */releases/43:'--jq [.id, .draft, .tag_name, (.body | @base64)] | @tsv')
+                        [ "$MODE" != state-read-fail ] || exit 46
+                        [ -e "$GH_STATE/created" ] || exit 97
+                        if [ -e "$GH_STATE/published" ]; then
+                            printf '43\tfalse\t%s\t\n' "$TAG"
+                        else
+                            printf '43\ttrue\t%s\t%s\n' "$TAG" "$marker_base64"
+                        fi
+                        ;;
+                    */releases/tags/*:'--jq [.id, .draft, (.body | @base64)] | @tsv')
+                        [ -e "$GH_STATE/created" ] || exit 97
+                        [ -e "$GH_STATE/published" ] || exit 106
+                        [ -e "$GH_STATE/body-cleared" ] || exit 107
+                        printf '43\tfalse\t\n'
                         ;;
                     *) exit 98 ;;
                 esac
@@ -126,8 +165,16 @@ case ${1:-} in
         case ${1:-} in
             create)
                 shift
-                [ "$*" = "--draft --verify-tag --title $TAG -- $TAG" ] || exit 99
+                [ "$*" = "--draft --verify-tag --title $TAG --notes $MARKER -- $TAG" ] || exit 99
                 : >"$GH_STATE/created"
+                if [ "$MODE" = competitor-create ]; then
+                    : >"$GH_STATE/competitor"
+                    exit 40
+                fi
+                : >"$GH_STATE/owned"
+                if [ "$MODE" = create-response-signal ]; then
+                    kill -TERM "$PPID"
+                fi
                 ;;
             upload)
                 shift
@@ -157,8 +204,10 @@ run_publish()
     log=$TMP/log-$mode
     mkdir "$state"
     : >"$log"
+    marker=squashfs-tools-static-release-owner:test-marker-$mode
     set +e
-    GH="$TMP/gh" GH_LOG="$log" GH_STATE="$state" MODE="$mode" TAG="$tag" \
+    GH="$TMP/gh" GH_LOG="$log" GH_STATE="$state" MODE="$mode" TAG="$tag" MARKER="$marker" \
+        RELEASE_OWNERSHIP_MARKER="$marker" \
         TEST_ROOT="$ROOT" GITHUB_REPOSITORY=example/project RELEASE_DIR="$TMP/release" \
         "$ROOT/scripts/publish-release.sh" "$tag" >"$TMP/out-$mode" 2>"$TMP/err-$mode"
     result=$?
@@ -196,7 +245,7 @@ fi
 printf '%s\n' 'ok - malformed release metadata fails closed'
 
 run_publish missing-success -v3 || fail 'new release publication should succeed'
-grep -F 'release create --draft --verify-tag --title -v3 -- -v3' "$RUN_LOG" >/dev/null ||
+grep -F 'release create --draft --verify-tag --title -v3 --notes squashfs-tools-static-release-owner:test-marker-missing-success -- -v3' "$RUN_LOG" >/dev/null ||
     fail 'release was not created as a verified draft with a safe option separator'
 grep -F 'release upload -- -v3 ' "$RUN_LOG" >/dev/null ||
     fail 'upload did not protect a dash-prefixed tag with an option separator'
@@ -205,14 +254,47 @@ if grep -F -- '--clobber' "$RUN_LOG" >/dev/null; then
 fi
 upload_line=$(grep -nF 'release upload -- -v3 ' "$RUN_LOG" | cut -d: -f1)
 verify_line=$(grep -nF 'api --paginate repos/example/project/releases/43/assets --jq .[].name' "$RUN_LOG" | cut -d: -f1 | sed -n '1p')
-publish_line=$(grep -nF 'api --method PATCH repos/example/project/releases/43 -f draft=false --silent' "$RUN_LOG" | cut -d: -f1)
-post_publish_line=$(grep -nF 'api repos/example/project/releases/tags/-v3 --jq [.id, .draft] | @tsv' "$RUN_LOG" | cut -d: -f1 | sed -n '2p')
+publish_line=$(grep -nF 'api --method PATCH repos/example/project/releases/43 --input - --silent' "$RUN_LOG" | cut -d: -f1)
+post_publish_line=$(grep -nF 'api repos/example/project/releases/tags/-v3 --jq [.id, .draft, (.body | @base64)] | @tsv' "$RUN_LOG" | cut -d: -f1)
 [ "$upload_line" -lt "$verify_line" ] || fail 'draft was not verified after upload'
 [ "$verify_line" -lt "$publish_line" ] || fail 'draft was published before exact manifest verification'
 [ "$publish_line" -lt "$post_publish_line" ] || fail 'published release state was not read back'
 [ -e "$RUN_STATE/published" ] || fail 'successful release remained a draft'
+[ -e "$RUN_STATE/body-cleared" ] || fail 'successful release exposed its ownership marker'
 [ ! -e "$RUN_STATE/deleted" ] || fail 'successful release draft was deleted'
 printf '%s\n' 'ok - missing release stays draft until exact upload verification, then publishes'
+
+if run_publish create-response-signal v-create-signal; then
+    fail 'signal after server-side draft creation should interrupt publication'
+fi
+[ "$RUN_RESULT" -ne 0 ] || fail 'create-window signal did not preserve a failing status'
+[ -e "$RUN_STATE/deleted" ] || fail 'create-window signal left a confirmed orphan draft'
+grep -F 'api repos/example/project/releases/tags/v-create-signal --jq [.id, .draft, .tag_name, (.body | @base64)] | @tsv' \
+    "$RUN_LOG" >/dev/null || fail 'create-window signal cleanup did not fresh-read the requested tag'
+grep -F 'api --method DELETE repos/example/project/releases/43' "$RUN_LOG" >/dev/null ||
+    fail 'create-window signal cleanup did not delete the confirmed orphan by id'
+set +e
+rerun_marker=squashfs-tools-static-release-owner:test-marker-rerun
+GH="$TMP/gh" GH_LOG="$RUN_LOG" GH_STATE="$RUN_STATE" MODE=missing-success TAG=v-create-signal MARKER="$rerun_marker" \
+    RELEASE_OWNERSHIP_MARKER="$rerun_marker" \
+    TEST_ROOT="$ROOT" GITHUB_REPOSITORY=example/project RELEASE_DIR="$TMP/release" \
+    "$ROOT/scripts/publish-release.sh" v-create-signal \
+    >"$TMP/out-create-signal-rerun" 2>"$TMP/err-create-signal-rerun"
+rerun_result=$?
+set -e
+[ "$rerun_result" -eq 0 ] || fail 'rerun remained blocked after create-window signal cleanup'
+printf '%s\n' 'ok - create-window signal fresh-reads and deletes only the confirmed orphan draft'
+
+if run_publish competitor-create v-competitor; then
+    fail 'a create lost to a competing publisher should fail'
+fi
+[ "$RUN_RESULT" -eq 40 ] || fail 'competing create did not preserve the create failure'
+[ -e "$RUN_STATE/created" ] || fail 'competing draft was removed'
+[ ! -e "$RUN_STATE/deleted-competitor" ] || fail 'cleanup deleted a competing publisher draft'
+if grep -F 'api --method DELETE repos/example/project/releases/77' "$RUN_LOG" >/dev/null; then
+    fail 'cleanup attempted to delete a competing publisher draft'
+fi
+printf '%s\n' 'ok - failed create never deletes a competing publisher draft'
 
 if run_publish publish-response-lost v-lost; then
     fail 'publication with a lost PATCH response should report failure'
