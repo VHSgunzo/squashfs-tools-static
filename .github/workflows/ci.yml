@@ -3,37 +3,117 @@ name: CI
 on:
   push:
     branches:
-    - action
+      - action
     tags:
-    - '*'
+      - '*'
   workflow_dispatch:
 
 jobs:
-  build_and_release:
-    name: squashfs-tools-static
+  contract-tests:
+    name: Contract tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes binutils file gcc
+
+      - name: Run unit and contract tests
+        run: |
+          for test in tests/*.sh; do
+            sh "$test"
+          done
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: contract-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64, riscv64, loongarch64, ppc64, ppc64le]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up QEMU binfmt
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: all
+
+      - name: Install artifact inspection and QEMU user tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes binutils file qemu-user-static
+
+      - name: Build selected architecture
+        run: ./scripts/build-matrix.sh "${{ matrix.arch }}"
+
+      - name: Validate and smoke-test selected architecture
+        run: |
+          ./scripts/validate-artifacts.sh "${{ matrix.arch }}"
+          ./scripts/smoke-test.sh "${{ matrix.arch }}"
+          . ./lib/matrix.sh
+          expected=$(expected_artifacts "${{ matrix.arch }}")
+          actual=$(
+            for artifact in release/*-"${{ matrix.arch }}"; do
+              test -f "$artifact" || continue
+              basename "$artifact"
+            done | LC_ALL=C sort
+          )
+          test "$actual" = "$expected"
+
+      - name: Upload selected architecture
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: squashfs-tools-${{ matrix.arch }}
+          path: |
+            release/mksquashfs-${{ matrix.arch }}
+            release/unsquashfs-${{ matrix.arch }}
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Install deps
-        run: |
-          sudo sh -c 'apt update && apt install qemu-user-static -y'
-
-      - name: Build x86_64
-        run: |
-            docker run --rm -v "${{ github.workspace }}:/root" --platform=linux/amd64 alpine:latest /root/build.sh
-
-      - name: Build aarch64
-        run: |
-            docker run --rm -v "${{ github.workspace }}:/root" --platform=linux/arm64 alpine:latest /root/build.sh
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Download all architecture artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          files: release/*
+          pattern: squashfs-tools-*
+          path: release
+          merge-multiple: true
+
+      - name: Validate exact release manifest
+        run: |
+          expected=$(. ./lib/matrix.sh; expected_artifact_manifest)
+          actual=$(
+            for artifact in release/*; do
+              test -f "$artifact" || continue
+              basename "$artifact"
+            done | LC_ALL=C sort
+          )
+          if test "$actual" != "$expected"; then
+            printf '%s\n' 'release artifact manifest mismatch' >&2
+            printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual" >&2
+            exit 1
+          fi
+
+      - name: Publish and verify exact tag release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/publish-release.sh "$GITHUB_REF_NAME"

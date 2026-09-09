@@ -11,7 +11,7 @@ fail()
     exit 1
 }
 
-for helper in lib/target.sh lib/release.sh
+for helper in lib/target.sh lib/release.sh lib/build-env.sh lib/matrix.sh lib/ppc64-toolchain.sh lib/source-pins.sh
 do
     if git -C "$ROOT" check-ignore --no-index -q -- "$helper"; then
         git_status=0
@@ -60,7 +60,7 @@ test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT HUP INT TERM
 fakebin=$test_tmp/default-bin
 mkdir "$fakebin"
-printf '%s\n' '#!/bin/sh' 'printf "%s\\n" riscv64' >"$fakebin/uname"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" riscv64' >"$fakebin/uname"
 chmod +x "$fakebin/uname"
 [ "$(PATH="$fakebin:$PATH" resolve_target_arch)" = riscv64 ] ||
     fail "TARGET_ARCH did not default from uname -m"
@@ -69,8 +69,8 @@ printf 'ok - TARGET_ARCH defaults from uname -m\n'
 preflight_bin=$test_tmp/preflight-bin
 side_effect=$test_tmp/side-effect
 mkdir "$preflight_bin"
-printf '%s\n' '#!/bin/sh' 'case ${1:-} in' '    -m) printf "%s\\n" x86_64 ;;' '    -s) printf "%s\\n" Linux ;;' 'esac' >"$preflight_bin/uname"
-printf '%s\n' '#!/bin/sh' 'printf "%s\\n" called >"$SIDE_EFFECT"' 'exit 77' >"$preflight_bin/apk"
+printf '%s\n' '#!/bin/sh' 'case ${1:-} in' '    -m) printf "%s\n" x86_64 ;;' '    -s) printf "%s\n" Linux ;;' 'esac' >"$preflight_bin/uname"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" called >"$SIDE_EFFECT"' 'exit 77' >"$preflight_bin/apk"
 chmod +x "$preflight_bin/uname" "$preflight_bin/apk"
 if mismatch_error=$(PATH="$preflight_bin:$PATH" SIDE_EFFECT="$side_effect" TARGET_ARCH=ppc64 \
     "$ROOT/build.sh" 2>&1); then
@@ -118,12 +118,18 @@ mkdir -p "$toolchain_root/lib" "$toolchain_bin"
 cp "$ROOT/build.sh" "$toolchain_root/build.sh"
 cp "$ROOT/lib/target.sh" "$toolchain_root/lib/target.sh"
 cp "$ROOT/lib/release.sh" "$toolchain_root/lib/release.sh"
-printf '%s\n' '#!/bin/sh' 'case ${1:-} in' '    -m) printf "%s\\n" x86_64 ;;' '    -s) printf "%s\\n" Linux ;;' 'esac' >"$toolchain_bin/uname"
-printf '%s\n' '#!/bin/sh' 'printf "%s\\n" 1' >"$toolchain_bin/nproc"
+cp "$ROOT/lib/build-env.sh" "$toolchain_root/lib/build-env.sh"
+cp "$ROOT/lib/source-pins.sh" "$toolchain_root/lib/source-pins.sh"
+printf '%s\n' '#!/bin/sh' 'case ${1:-} in' '    -m) printf "%s\n" x86_64 ;;' '    -s) printf "%s\n" Linux ;;' 'esac' >"$toolchain_bin/uname"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" 1' >"$toolchain_bin/nproc"
 printf '%s\n' '#!/bin/sh' 'exit 0' >"$toolchain_bin/apk"
+for tool in custom-cc custom-cxx custom-ar custom-ranlib custom-strip
+do
+    printf '%s\n' '#!/bin/sh' 'exit 0' >"$toolchain_bin/$tool"
+done
 printf '%s\n' '#!/bin/sh' 'env >"$TOOLCHAIN_CAPTURE"' 'exit 78' >"$toolchain_bin/git"
 chmod +x "$toolchain_root/build.sh" "$toolchain_bin/uname" "$toolchain_bin/nproc" \
-    "$toolchain_bin/apk" "$toolchain_bin/git"
+    "$toolchain_bin/apk" "$toolchain_bin/git" "$toolchain_bin"/custom-*
 if PATH="$toolchain_bin:$PATH" TOOLCHAIN_CAPTURE="$toolchain_capture" TARGET_ARCH=x86_64 \
     CC=custom-cc CXX=custom-cxx AR=custom-ar RANLIB=custom-ranlib STRIP=custom-strip \
     CROSS_COMPILE=custom- CMAKE_TOOLCHAIN_FILE=/toolchain.cmake \
@@ -163,13 +169,16 @@ do
     printf 'stale %s\n' "$asset" >"$toolchain_root/release/$asset"
 done
 PATH="$toolchain_bin:$PATH" TOOLCHAIN_CAPTURE="$toolchain_capture" TARGET_ARCH=x86_64 \
-    "$toolchain_root/build.sh" >/dev/null 2>&1 || :
+    CC=cc CXX=c++ AR=ar RANLIB=ranlib STRIP=strip \
+    "$toolchain_root/build.sh" 2>"$test_tmp/cleanup-error" || :
 for stale in \
     mksquashfs-x86_64 unsquashfs-x86_64 \
     mksquashfs-x86_64-upx unsquashfs-x86_64-upx
 do
-    [ ! -e "$toolchain_root/release/$stale" ] ||
+    [ ! -e "$toolchain_root/release/$stale" ] || {
+        cat "$test_tmp/cleanup-error" >&2
         fail "current-target stale release asset was not removed: $stale"
+    }
 done
 for preserved in mksquashfs-aarch64 unsquashfs-ppc64le-upx notes-x86_64.txt
 do
@@ -202,7 +211,7 @@ printf 'old binary\n' >"$release_test/mksquashfs-x86_64"
 failing_bin=$test_tmp/failing-copy-bin
 mkdir "$failing_bin"
 printf '%s\n' '#!/bin/sh' 'for destination do :; done' \
-    'printf "%s\\n" partial >"$destination"' 'exit 79' >"$failing_bin/cp"
+    'printf "%s\n" partial >"$destination"' 'exit 79' >"$failing_bin/cp"
 chmod +x "$failing_bin/cp"
 if PATH="$failing_bin:$PATH" install_release_binary \
     "$release_source" "$release_test" x86_64; then

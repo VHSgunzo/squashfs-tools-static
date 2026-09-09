@@ -42,8 +42,29 @@ validate_native_target()
 {
     set -- "$(uname -m)" "$TARGET_ARCH"
     if [ "$1" != "$2" ]; then
-        printf "TARGET_ARCH '%s' does not match build machine '%s'; true cross builds require an explicit cross-toolchain mode (not yet supported)\n" \
+        printf "TARGET_ARCH '%s' does not match build machine '%s'; use scripts/build-matrix.sh for supported foreign builds\n" \
             "$2" "$1" >&2
         return 1
     fi
+}
+
+validate_build_mode()
+{
+    BUILD_MODE=${BUILD_MODE:-native-emulated}
+    case $BUILD_MODE in
+        native-emulated)
+            validate_native_target
+            ;;
+        cross-musl)
+            if [ "$TARGET_ARCH" != ppc64 ]; then
+                printf '%s\n' 'cross-musl mode is only supported for ppc64' >&2
+                return 1
+            fi
+            ;;
+        *)
+            printf "unsupported BUILD_MODE '%s' (supported: native-emulated, cross-musl)\n" \
+                "$BUILD_MODE" >&2
+            return 1
+            ;;
+    esac
 }
