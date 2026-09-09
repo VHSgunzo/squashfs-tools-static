@@ -35,6 +35,7 @@ fi
 
 headers_file=$(mktemp)
 error_file=$(mktemp)
+drafts_file=$(mktemp)
 creation_attempted=false
 publication_known=false
 release_id=
@@ -48,20 +49,74 @@ if [ -z "$ownership_marker" ]; then
     ownership_marker=squashfs-tools-static-release-owner:$ownership_nonce
 fi
 ownership_marker_base64=$(printf '%s' "$ownership_marker" | base64 | tr -d '\n')
+tag_base64=$(printf '%s' "$tag" | base64 | tr -d '\n')
+tab=$(printf '\t')
+
+# gh applies --jq separately to each response page in --paginate mode, so the
+# query iterates one page array rather than a slurped outer array.
+load_draft_releases()
+{
+    "$GH" api --paginate "repos/$repository/releases?per_page=100" \
+        --jq '.[] | select(.draft == true) | [.id, (.tag_name | @base64), ((.body // "") | @base64)] | @tsv' \
+        >"$drafts_file"
+}
+
+count_tag_drafts()
+{
+    draft_count=0
+    while IFS="$tab" read -r candidate_id candidate_tag_base64 candidate_body_base64 candidate_extra
+    do
+        [ -n "$candidate_id$candidate_tag_base64$candidate_body_base64$candidate_extra" ] || continue
+        if [ "$candidate_tag_base64" = "$tag_base64" ]; then
+            draft_count=$((draft_count + 1))
+        fi
+    done <"$drafts_file"
+    printf '%s\n' "$draft_count"
+}
+
+owned_draft_id()
+{
+    owned_count=0
+    owned_id=
+    owned_invalid=false
+    while IFS="$tab" read -r candidate_id candidate_tag_base64 candidate_body_base64 candidate_extra
+    do
+        [ -n "$candidate_id$candidate_tag_base64$candidate_body_base64$candidate_extra" ] || continue
+        if [ "$candidate_tag_base64" = "$tag_base64" ] && \
+            [ "$candidate_body_base64" = "$ownership_marker_base64" ]; then
+            owned_count=$((owned_count + 1))
+            owned_id=$candidate_id
+            case $candidate_id in
+                ''|*[!0-9]*) owned_invalid=true ;;
+            esac
+            [ -z "$candidate_extra" ] || owned_invalid=true
+        fi
+    done <"$drafts_file"
+
+    [ "$owned_count" -eq 1 ] || return 1
+    [ "$owned_invalid" = false ] || return 2
+    printf '%s\n' "$owned_id"
+}
+
 cleanup()
 {
     result=$?
     trap - EXIT HUP INT TERM
     if [ "$result" -ne 0 ] && [ "$creation_attempted" = true ] && [ "$publication_known" != true ]; then
         cleanup_tab=$(printf '\t')
+        cleanup_lookup_ok=true
         if [ -n "$release_id" ]; then
             cleanup_endpoint="repos/$repository/releases/$release_id"
             cleanup_subject="release $release_id"
         else
-            cleanup_endpoint=$release_endpoint
             cleanup_subject="requested tag release $tag"
+            if load_draft_releases && cleanup_id=$(owned_draft_id); then
+                cleanup_endpoint="repos/$repository/releases/$cleanup_id"
+            else
+                cleanup_lookup_ok=false
+            fi
         fi
-        if cleanup_data=$("$GH" api "$cleanup_endpoint" \
+        if [ "$cleanup_lookup_ok" = true ] && cleanup_data=$("$GH" api "$cleanup_endpoint" \
             --jq '[.id, .draft, .tag_name, (.body | @base64)] | @tsv'); then
             cleanup_id=${cleanup_data%%"$cleanup_tab"*}
             cleanup_rest=${cleanup_data#*"$cleanup_tab"}
@@ -92,11 +147,16 @@ cleanup()
                     "$cleanup_subject" >&2
             fi
         else
-            printf 'warning: failed to read %s state; leaving it for manual inspection\n' \
-                "$cleanup_subject" >&2
+            if [ "$cleanup_lookup_ok" = true ]; then
+                printf 'warning: failed to read %s state; leaving it for manual inspection\n' \
+                    "$cleanup_subject" >&2
+            else
+                printf 'warning: could not identify exactly one owned draft for %s; leaving drafts for manual inspection\n' \
+                    "$tag" >&2
+            fi
         fi
     fi
-    rm -f "$headers_file" "$error_file"
+    rm -f "$headers_file" "$error_file" "$drafts_file"
     exit "$result"
 }
 trap cleanup EXIT
@@ -160,33 +220,37 @@ case $http_status in
         ;;
 esac
 
+if ! load_draft_releases; then
+    printf '%s\n' 'failed to list draft releases before creation; refusing to mutate releases' >&2
+    exit 1
+fi
+tag_draft_count=$(count_tag_drafts)
+if [ "$tag_draft_count" -ne 0 ]; then
+    printf 'found %s existing draft release(s) for tag %s; refusing to create or adopt a draft; remove them manually after inspection\n' \
+        "$tag_draft_count" "$tag" >&2
+    exit 1
+fi
+
 # A missing tag release is assembled privately. Published releases are never
 # modified: failures below delete only a freshly confirmed matching draft.
 # Record intent before create because a signal can arrive after GitHub creates
 # the draft but before the gh process returns its response.
 creation_attempted=true
 "$GH" release create --draft --verify-tag --title "$tag" --notes "$ownership_marker" -- "$tag"
-release_data=$("$GH" api "$release_endpoint" \
-    --jq '[.id, .draft, .tag_name, (.body | @base64)] | @tsv')
-tab=$(printf '\t')
-release_id=${release_data%%"$tab"*}
-release_rest=${release_data#*"$tab"}
-release_draft=${release_rest%%"$tab"*}
-release_rest_after_draft=${release_rest#*"$tab"}
-release_tag=${release_rest_after_draft%%"$tab"*}
-release_body_base64=${release_rest_after_draft#*"$tab"}
-case $release_id in
-    ''|*[!0-9]*)
-        printf 'invalid new draft metadata: %s\n' "$release_data" >&2
-        exit 1
-        ;;
-esac
-if [ "$release_rest" = "$release_data" ] || \
-    [ "$release_rest_after_draft" = "$release_rest" ] || \
-    [ "$release_body_base64" = "$release_rest_after_draft" ] || \
-    [ "$release_draft" != true ] || [ "$release_tag" != "$tag" ] || \
-    [ "$release_body_base64" != "$ownership_marker_base64" ]; then
-    printf '%s\n' 'new release is not the owned draft; refusing upload' >&2
+if ! load_draft_releases; then
+    printf '%s\n' 'failed to list draft releases after creation; refusing upload' >&2
+    exit 1
+fi
+if release_id=$(owned_draft_id); then
+    :
+else
+    owned_status=$?
+    if [ "$owned_status" -eq 2 ]; then
+        printf '%s\n' 'owned draft lookup returned a malformed numeric release id; refusing upload' >&2
+    else
+        printf '%s\n' 'owned draft lookup did not find exactly one exact tag and ownership marker match; refusing upload' >&2
+    fi
+    release_id=
     exit 1
 fi
 

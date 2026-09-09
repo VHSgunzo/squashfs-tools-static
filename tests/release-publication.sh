@@ -52,7 +52,9 @@ case ${1:-} in
                 shift
                 case $MODE in
                     existing-exact|existing-mismatch|invalid-metadata) status=200 ;;
-                    *) [ -e "$GH_STATE/created" ] && status=200 || status=404 ;;
+                    # GitHub's get-by-tag endpoint does not expose drafts, even
+                    # immediately after a successful draft creation.
+                    *) status=404 ;;
                 esac
                 if [ "$status" = 200 ]; then
                     printf 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n'
@@ -63,6 +65,33 @@ case ${1:-} in
                 ;;
             --paginate)
                 shift
+                if [ "${1:-}" = 'repos/example/project/releases?per_page=100' ]; then
+                    endpoint=$1
+                    shift
+                    [ "$*" = '--jq .[] | select(.draft == true) | [.id, (.tag_name | @base64), ((.body // "") | @base64)] | @tsv' ] || exit 109
+                    tag_base64=$(printf '%s' "$TAG" | base64 | tr -d '\n')
+                    competitor_base64=$(printf '%s' 'different-prior-run-marker' | base64 | tr -d '\n')
+                    if [ "$MODE" = prior-run-draft ]; then
+                        printf '77\t%s\t%s\n' "$tag_base64" "$competitor_base64"
+                    elif [ -e "$GH_STATE/created" ]; then
+                        case $MODE in
+                            competitor-create)
+                                printf '77\t%s\t%s\n' "$tag_base64" "$competitor_base64"
+                                ;;
+                            multiple-owned)
+                                printf '43\t%s\t%s\n44\t%s\t%s\n' \
+                                    "$tag_base64" "$marker_base64" "$tag_base64" "$marker_base64"
+                                ;;
+                            malformed-owned)
+                                printf 'not-a-number\t%s\t%s\n' "$tag_base64" "$marker_base64"
+                                ;;
+                            *)
+                                printf '43\t%s\t%s\n' "$tag_base64" "$marker_base64"
+                                ;;
+                        esac
+                    fi
+                    exit 0
+                fi
                 case $1 in
                     */42/assets)
                         [ "$MODE" = existing-exact ] && emit_manifest || printf '%s\n' stale.bin
@@ -120,16 +149,9 @@ case ${1:-} in
                         esac
                         ;;
                     */releases/tags/*:'--jq [.id, .draft, .tag_name, (.body | @base64)] | @tsv')
-                        [ -e "$GH_STATE/created" ] || exit 97
-                        if [ "$MODE" = competitor-create ]; then
-                            printf '77\ttrue\t%s\t\n' "$TAG"
-                            exit 0
-                        fi
-                        if [ -e "$GH_STATE/published" ]; then
-                            printf '43\tfalse\t%s\t\n' "$TAG"
-                        else
-                            printf '43\ttrue\t%s\t%s\n' "$TAG" "$marker_base64"
-                        fi
+                        # Contract assertion: drafts are never returned here.
+                        [ -e "$GH_STATE/published" ] || exit 97
+                        printf '43\tfalse\t%s\t\n' "$TAG"
                         ;;
                     */releases/43:'--jq [.id, .draft] | @tsv')
                         [ "$MODE" != state-read-fail ] || exit 46
@@ -244,6 +266,16 @@ if grep -E 'release (create|upload)|api --method (DELETE|PATCH)' "$RUN_LOG" >/de
 fi
 printf '%s\n' 'ok - malformed release metadata fails closed'
 
+if run_publish prior-run-draft v-prior; then
+    fail 'an existing exact-tag draft from another invocation should block creation'
+fi
+grep -F 'found 1 existing draft release(s) for tag v-prior' "$TMP/err-prior-run-draft" >/dev/null ||
+    fail 'prior-run draft did not produce a clear manual-cleanup diagnostic'
+if grep -E 'release (create|upload)|api --method (DELETE|PATCH)' "$RUN_LOG" >/dev/null; then
+    fail 'prior-run draft was adopted or mutated'
+fi
+printf '%s\n' 'ok - prior-run exact-tag draft blocks creation without adoption or mutation'
+
 run_publish missing-success -v3 || fail 'new release publication should succeed'
 grep -F 'release create --draft --verify-tag --title -v3 --notes squashfs-tools-static-release-owner:test-marker-missing-success -- -v3' "$RUN_LOG" >/dev/null ||
     fail 'release was not created as a verified draft with a safe option separator'
@@ -256,6 +288,11 @@ upload_line=$(grep -nF 'release upload -- -v3 ' "$RUN_LOG" | cut -d: -f1)
 verify_line=$(grep -nF 'api --paginate repos/example/project/releases/43/assets --jq .[].name' "$RUN_LOG" | cut -d: -f1 | sed -n '1p')
 publish_line=$(grep -nF 'api --method PATCH repos/example/project/releases/43 --input - --silent' "$RUN_LOG" | cut -d: -f1)
 post_publish_line=$(grep -nF 'api repos/example/project/releases/tags/-v3 --jq [.id, .draft, (.body | @base64)] | @tsv' "$RUN_LOG" | cut -d: -f1)
+grep -F 'api --paginate repos/example/project/releases?per_page=100 --jq .[] | select(.draft == true)' \
+    "$RUN_LOG" >/dev/null || fail 'draft discovery did not list all paginated releases'
+if grep -F 'api repos/example/project/releases/tags/-v3 --jq [.id, .draft, .tag_name' "$RUN_LOG" >/dev/null; then
+    fail 'new draft was incorrectly read through the get-by-tag endpoint'
+fi
 [ "$upload_line" -lt "$verify_line" ] || fail 'draft was not verified after upload'
 [ "$verify_line" -lt "$publish_line" ] || fail 'draft was published before exact manifest verification'
 [ "$publish_line" -lt "$post_publish_line" ] || fail 'published release state was not read back'
@@ -269,8 +306,10 @@ if run_publish create-response-signal v-create-signal; then
 fi
 [ "$RUN_RESULT" -ne 0 ] || fail 'create-window signal did not preserve a failing status'
 [ -e "$RUN_STATE/deleted" ] || fail 'create-window signal left a confirmed orphan draft'
-grep -F 'api repos/example/project/releases/tags/v-create-signal --jq [.id, .draft, .tag_name, (.body | @base64)] | @tsv' \
-    "$RUN_LOG" >/dev/null || fail 'create-window signal cleanup did not fresh-read the requested tag'
+grep -F 'api --paginate repos/example/project/releases?per_page=100 --jq .[] | select(.draft == true)' \
+    "$RUN_LOG" >/dev/null || fail 'create-window signal cleanup did not rediscover the draft from the release list'
+grep -F 'api repos/example/project/releases/43 --jq [.id, .draft, .tag_name, (.body | @base64)] | @tsv' \
+    "$RUN_LOG" >/dev/null || fail 'create-window signal cleanup did not fresh-read the discovered numeric id'
 grep -F 'api --method DELETE repos/example/project/releases/43' "$RUN_LOG" >/dev/null ||
     fail 'create-window signal cleanup did not delete the confirmed orphan by id'
 set +e
@@ -295,6 +334,27 @@ if grep -F 'api --method DELETE repos/example/project/releases/77' "$RUN_LOG" >/
     fail 'cleanup attempted to delete a competing publisher draft'
 fi
 printf '%s\n' 'ok - failed create never deletes a competing publisher draft'
+
+if run_publish multiple-owned v-multiple; then
+    fail 'multiple matching owned drafts should fail closed'
+fi
+[ ! -e "$RUN_STATE/deleted" ] || fail 'ambiguous matching drafts were deleted'
+if grep -F 'api --method DELETE' "$RUN_LOG" >/dev/null; then
+    fail 'cleanup attempted deletion after ambiguous draft discovery'
+fi
+grep -F 'did not find exactly one exact tag and ownership marker match' \
+    "$TMP/err-multiple-owned" >/dev/null || fail 'multiple matching drafts lacked a clear diagnostic'
+printf '%s\n' 'ok - multiple matching owned drafts fail closed without cleanup deletion'
+
+if run_publish malformed-owned v-malformed-owned; then
+    fail 'owned draft with malformed id should fail closed'
+fi
+if grep -F 'api --method DELETE' "$RUN_LOG" >/dev/null; then
+    fail 'cleanup attempted deletion with a malformed draft id'
+fi
+grep -F 'malformed numeric release id' "$TMP/err-malformed-owned" >/dev/null ||
+    fail 'malformed owned draft id lacked a clear diagnostic'
+printf '%s\n' 'ok - malformed owned draft id fails closed without deletion'
 
 if run_publish publish-response-lost v-lost; then
     fail 'publication with a lost PATCH response should report failure'
