@@ -98,6 +98,30 @@ owned_draft_id()
     printf '%s\n' "$owned_id"
 }
 
+wait_for_owned_draft()
+{
+    lookup_attempts=${RELEASE_DRAFT_LOOKUP_ATTEMPTS:-5}
+    lookup_delay=${RELEASE_DRAFT_LOOKUP_DELAY_SECONDS:-1}
+    case $lookup_attempts in ''|*[!0-9]*|0) return 2 ;; esac
+    case $lookup_delay in ''|*[!0-9]*) return 2 ;; esac
+
+    lookup_attempt=1
+    while [ "$lookup_attempt" -le "$lookup_attempts" ]
+    do
+        load_draft_releases || return 3
+        if lookup_id=$(owned_draft_id); then
+            printf '%s\n' "$lookup_id"
+            return 0
+        else
+            lookup_status=$?
+        fi
+        [ "$lookup_status" -ne 2 ] || return 2
+        [ "$lookup_attempt" -lt "$lookup_attempts" ] || return 1
+        sleep "$lookup_delay"
+        lookup_attempt=$((lookup_attempt + 1))
+    done
+}
+
 cleanup()
 {
     result=$?
@@ -237,18 +261,16 @@ fi
 # the draft but before the gh process returns its response.
 creation_attempted=true
 "$GH" release create --draft --verify-tag --title "$tag" --notes "$ownership_marker" -- "$tag"
-if ! load_draft_releases; then
-    printf '%s\n' 'failed to list draft releases after creation; refusing upload' >&2
-    exit 1
-fi
-if release_id=$(owned_draft_id); then
+if release_id=$(wait_for_owned_draft); then
     :
 else
     owned_status=$?
     if [ "$owned_status" -eq 2 ]; then
-        printf '%s\n' 'owned draft lookup returned a malformed numeric release id; refusing upload' >&2
+        printf '%s\n' 'owned draft lookup returned malformed retry configuration or a malformed numeric release id; refusing upload' >&2
+    elif [ "$owned_status" -eq 3 ]; then
+        printf '%s\n' 'failed to list draft releases after creation; refusing upload' >&2
     else
-        printf '%s\n' 'owned draft lookup did not find exactly one exact tag and ownership marker match; refusing upload' >&2
+        printf '%s\n' 'owned draft lookup did not find exactly one exact tag and ownership marker match after bounded retries; refusing upload' >&2
     fi
     release_id=
     exit 1

@@ -85,6 +85,13 @@ case ${1:-} in
                             malformed-owned)
                                 printf 'not-a-number\t%s\t%s\n' "$tag_base64" "$marker_base64"
                                 ;;
+                            delayed-visible)
+                                if [ -e "$GH_STATE/delayed-once" ]; then
+                                    printf '43\t%s\t%s\n' "$tag_base64" "$marker_base64"
+                                else
+                                    : >"$GH_STATE/delayed-once"
+                                fi
+                                ;;
                             *)
                                 printf '43\t%s\t%s\n' "$tag_base64" "$marker_base64"
                                 ;;
@@ -230,6 +237,7 @@ run_publish()
     set +e
     GH="$TMP/gh" GH_LOG="$log" GH_STATE="$state" MODE="$mode" TAG="$tag" MARKER="$marker" \
         RELEASE_OWNERSHIP_MARKER="$marker" \
+        RELEASE_DRAFT_LOOKUP_ATTEMPTS=3 RELEASE_DRAFT_LOOKUP_DELAY_SECONDS=0 \
         TEST_ROOT="$ROOT" GITHUB_REPOSITORY=example/project RELEASE_DIR="$TMP/release" \
         "$ROOT/scripts/publish-release.sh" "$tag" >"$TMP/out-$mode" 2>"$TMP/err-$mode"
     result=$?
@@ -300,6 +308,12 @@ fi
 [ -e "$RUN_STATE/body-cleared" ] || fail 'successful release exposed its ownership marker'
 [ ! -e "$RUN_STATE/deleted" ] || fail 'successful release draft was deleted'
 printf '%s\n' 'ok - missing release stays draft until exact upload verification, then publishes'
+
+run_publish delayed-visible v-delayed || fail 'eventually visible owned draft should publish successfully'
+[ -e "$RUN_STATE/delayed-once" ] || fail 'delayed fixture did not hide the first post-create lookup'
+[ -e "$RUN_STATE/published" ] || fail 'eventually visible owned draft was not published'
+[ ! -e "$RUN_STATE/deleted" ] || fail 'eventually visible owned draft was deleted'
+printf '%s\n' 'ok - bounded lookup retry handles GitHub draft eventual consistency'
 
 if run_publish create-response-signal v-create-signal; then
     fail 'signal after server-side draft creation should interrupt publication'
